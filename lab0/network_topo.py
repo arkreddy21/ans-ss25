@@ -22,6 +22,7 @@
 #!/usr/bin/python
 
 from mininet.topo import Topo
+from mininet.link import TCLink
 
 class BridgeTopo(Topo):
     "Creat a bridge-like customized network topology according to Figure 1 in the lab0 description."
@@ -31,5 +32,16 @@ class BridgeTopo(Topo):
         Topo.__init__(self)
 
         # TODO: add nodes and links to construct the topology; remember to specify the link properties
+        h1 = self.addHost('h1', cpu=0.5)
+        h2 = self.addHost('h2', cpu=0.5)
+        h3 = self.addHost('h3', cpu=0.5)
+        h4 = self.addHost('h4', cpu=0.5)
+        s1 = self.addSwitch('s1')
+        s2 = self.addSwitch('s2')
+        self.addLink(h1, s1, cls=TCLink, bw=15, delay='10ms')
+        self.addLink(h2, s1, cls=TCLink, bw=15, delay='10ms')
+        self.addLink(s1, s2, cls=TCLink, bw=20, delay='45ms')
+        self.addLink(h3, s2, cls=TCLink, bw=15, delay='10ms')
+        self.addLink(h4, s2, cls=TCLink, bw=15, delay='10ms')
 
 topos = {'bridge': (lambda: BridgeTopo())}
