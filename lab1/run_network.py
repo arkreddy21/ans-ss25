@@ -23,11 +23,23 @@
 
 from mininet.topo import Topo
 from mininet.net import Mininet
-from mininet.node import RemoteController, OVSKernelSwitch
+from mininet.node import RemoteController, OVSKernelSwitch, Node
 from mininet.link import TCLink
 from mininet.cli import CLI
 from mininet.log import setLogLevel
 
+
+class Router( Node ):
+    "A Node with IP forwarding enabled."
+
+    def config( self, **params ):
+        super( Router, self).config( **params )
+        # Enable forwarding on the router
+        self.cmd( 'sysctl net.ipv4.ip_forward=1' )
+
+    def terminate( self ):
+        self.cmd( 'sysctl net.ipv4.ip_forward=0' )
+        super( Router, self ).terminate()
 
 class NetworkTopo(Topo):
 
@@ -36,6 +48,19 @@ class NetworkTopo(Topo):
         Topo.__init__(self)
 
         # Build the specified network topology here
+        h1  = self.addHost('h1', ip="10.0.1.2/24")
+        h2  = self.addHost('h2', ip="10.0.1.3/24")
+        ext = self.addHost('ext', ip="192.168.1.123/24")
+        ser = self.addHost('ser', ip="10.0.2.2/24")
+        s1 = self.addSwitch('s1')
+        s2 = self.addSwitch('s2')
+        router = self.addNode('s3', cls=Router)
+        self.addLink(s1, h1, bw=15, delay="10ms")
+        self.addLink(s1, h2, bw=15, delay="10ms")
+        self.addLink(s2, ser, bw=15, delay="10ms")
+        self.addLink(s1, router, bw=15, delay="10ms")
+        self.addLink(s2, router, bw=15, delay="10ms")
+        self.addLink(ext, router, bw=15, delay="10ms")
 
 def run():
     topo = NetworkTopo()
