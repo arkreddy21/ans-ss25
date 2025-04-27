@@ -61,13 +61,13 @@ class NetworkTopo(Topo):
         self.addLink(s2, ser, bw=15, delay='10ms')
         self.addLink(s1, router, bw=15, delay='10ms',
                      intfName2='s3-eth1', 
-                     params2={'ip': '10.0.1.1/24'})
+                     params2={'ip': '10.0.1.1/24'}, addr2='00:00:00:00:01:01')
         self.addLink(s2, router, bw=15, delay='10ms',
                      intfName2='s3-eth2', 
-                     params2={'ip': '10.0.2.1/24'})
+                     params2={'ip': '10.0.2.1/24'}, addr2='00:00:00:00:01:02')
         self.addLink(ext, router, bw=15, delay='10ms',
                      intfName2='s3-eth3', 
-                     params2={'ip': '192.168.1.1/24'})
+                     params2={'ip': '192.168.1.1/24'}, addr2='00:00:00:00:01:03')
 
 
 def run():
