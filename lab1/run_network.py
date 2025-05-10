@@ -62,7 +62,11 @@ def run():
         controller=RemoteController,
         ip='127.0.0.1',
         port=6653)
+    s3 = net.get('s3')
     net.start()
+    s3.cmd('ip link set dev s3-eth1 address 00:00:00:00:01:01')
+    s3.cmd('ip link set dev s3-eth2 address 00:00:00:00:01:02')
+    s3.cmd('ip link set dev s3-eth3 address 00:00:00:00:01:03')
     CLI(net)
     net.stop()
 
