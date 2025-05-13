@@ -25,7 +25,7 @@ from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER
 from ryu.controller.handler import set_ev_cls
 from ryu.ofproto import ofproto_v1_3
 from ryu.lib.packet import packet, ethernet, ether_types
-from ryu.lib.packet import arp, ipv4, icmp, tcp, udp
+from ryu.lib.packet import arp, ipv4, icmp
 from ipaddress import IPv4Address, IPv4Network
 
 
@@ -74,10 +74,6 @@ class LearningSwitch(app_manager.RyuApp):
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
                                           ofproto.OFPCML_NO_BUFFER)]
         self.add_flow(datapath, 0, match, actions)
-
-        # Install security policies in router
-        if datapath.id in self.router_dpids:
-            self.install_security_policies(datapath, parser)
 
     # Add a flow entry to the flow-table
     def add_flow(self, datapath, priority, match, actions):
@@ -133,7 +129,7 @@ class LearningSwitch(app_manager.RyuApp):
             match = parser.OFPMatch(in_port=in_port, eth_dst=eth.dst)
             self.add_flow(datapath, 1, match, actions)
 
-        self.send_packet(datapath, in_port, actions, msg.data)
+        self.send_packet_out(datapath, in_port, actions, msg.data)
 
     def router_packet_handler(self, msg, datapath, ofproto, parser):
         in_port = msg.match['in_port']
@@ -160,11 +156,21 @@ class LearningSwitch(app_manager.RyuApp):
         # update ARP table with source IP -> source MAC
         self.router_arp_table[src_ip] = eth.src
         
-        #TODO handle ICMP pings to router's gateway
-        # if dst_ip == self.router_port_to_own_ip[in_port]:
-        #     self.router_icmp_handler()
-        #     return
-        
+        # handle ICMP pings to router's gateway
+        if protocol == 1 and dst_ip in self.router_port_to_own_ip.values():
+            # block pings from a host to other gateways
+            if dst_ip != self.router_port_to_own_ip[in_port]:
+                self.logger.warning("Router: Security - Host %s not allowed to ping gateway %s", src_ip, dst_ip)
+                self.router_icmp_handler(datapath, msg, ofproto, parser, in_port, eth.src, ip_pkt.src, None, 3, 1)
+                return
+            icmp_pkt = pkt.get_protocol(icmp.icmp)
+            if icmp_pkt and icmp_pkt.type == 8: # ICMP ping echo request
+                self.router_icmp_handler(datapath, msg, ofproto, parser, in_port, eth.src, ip_pkt.src, icmp_pkt)
+                return
+        # handle security conditions
+        if not self.security_check(msg, ip_pkt, eth, datapath, in_port, ofproto, parser):
+            return
+
         # Get out port based on known router subnets
         out_port = None
         for port, gateway in self.router_port_to_own_ip.items():
@@ -173,6 +179,7 @@ class LearningSwitch(app_manager.RyuApp):
                 break
         if out_port == None:
             self.logger.warning("Router: no route found %s", dst_ip)
+            self.router_icmp_handler(datapath, msg, ofproto, parser, in_port, eth.src, ip_pkt.src, None, 3, 1)
             return
         
         src_mac = self.router_port_to_own_mac[out_port]
@@ -190,6 +197,7 @@ class LearningSwitch(app_manager.RyuApp):
 
         match = parser.OFPMatch(
             eth_type=ether_types.ETH_TYPE_IP,
+            ipv4_src=src_ip,
             ipv4_dst=dst_ip
         )
         # Decrement TTL, modify src and dst MAC, set output port. Order matters
@@ -200,8 +208,7 @@ class LearningSwitch(app_manager.RyuApp):
             parser.OFPActionOutput(out_port)
         ]
         self.add_flow(datapath, 1, match, actions)
-        self.send_packet(datapath, in_port, actions, msg.data)
-
+        self.send_packet_out(datapath, in_port, actions, msg.data)
 
     def router_arp_handler(self, pkt, eth, datapath, in_port, ofproto, parser):
         arp_pkt = pkt.get_protocol(arp.arp)
@@ -229,7 +236,7 @@ class LearningSwitch(app_manager.RyuApp):
             ))
             actions=[parser.OFPActionOutput(in_port)]
             arp_response_pkt.serialize()
-            self.send_packet(datapath, ofproto.OFPP_CONTROLLER, actions, arp_response_pkt.data)
+            self.send_packet_out(datapath, ofproto.OFPP_CONTROLLER, actions, arp_response_pkt.data)
         
         if (arp_pkt.opcode == arp.ARP_REPLY):
             src_ip = arp_pkt.src_ip
@@ -263,9 +270,9 @@ class LearningSwitch(app_manager.RyuApp):
         ))
         p.serialize()
         actions = [parser.OFPActionOutput(port)]
-        self.send_packet(datapath, ofproto.OFPP_CONTROLLER, actions, p.data)
+        self.send_packet_out(datapath, ofproto.OFPP_CONTROLLER, actions, p.data)
 
-    def send_packet(self, datapath, in_port, actions, data):
+    def send_packet_out(self, datapath, in_port, actions, data):
         """send packet out message via the given datapath"""
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
@@ -276,35 +283,68 @@ class LearningSwitch(app_manager.RyuApp):
             actions=actions,
             data=data
         ))
+    
+    def router_icmp_handler(self, datapath, msg, ofproto, parser, in_port, src_mac, src_ip, icmp_pkt=None, icmp_type=0, icmp_code=0):
+        """
+        General function to send ICMP messages from the router. \n
+        ICMP types and codes handled: \n
+        (0,  0): echo reply \n
+        (3,  1): destination host unreachable \n
+        Refer https://github.com/faucetsdn/ryu/blob/master/ryu/lib/packet/icmp.py#L26
+        """
+        reply_pkt = packet.Packet()
+        reply_pkt.add_protocol(ethernet.ethernet(
+            dst=src_mac,
+            src=self.router_port_to_own_mac[in_port],
+            ethertype=ether_types.ETH_TYPE_IP
+        ))
+        reply_pkt.add_protocol(ipv4.ipv4(
+            dst=src_ip,
+            src=self.router_port_to_own_ip[in_port],
+            proto=1, #ICMP protocol
+            ttl=64
+        ))
 
-    def install_security_policies(self, datapath, parser):
-        """Install security policy flow rules"""
-        # Policy 1: Block ICMP from external host
-        match = parser.OFPMatch(
-            eth_type=ether_types.ETH_TYPE_IP,
-            ipv4_src=self.external_ip,
-            ip_proto=1  # ICMP
-        )
-        self.add_flow(datapath, 100, match, [])  # No actions = drop
-
-        # Policy 2: Block TCP/UDP between external host and server
-        for proto in [6, 17]:  # TCP, UDP
-            # External to server
-            match = parser.OFPMatch(
-                eth_type=ether_types.ETH_TYPE_IP,
-                ipv4_src=self.external_ip,
-                ipv4_dst=self.server_ip,
-                ip_proto=proto
+        # ICMP data - content depend on the type
+        icmp_data = None
+        # Echo reply for ping. Preserve original data
+        # Refer https://github.com/faucetsdn/ryu/blob/master/ryu/lib/packet/icmp.py#L137
+        if icmp_type == 0 and isinstance(icmp_pkt.data, icmp.echo):
+            icmp_data = icmp.echo(
+                id_=icmp_pkt.data.id,
+                seq=icmp_pkt.data.seq,
+                data=icmp_pkt.data.data
             )
-            self.add_flow(datapath, 100, match, [])
+        elif icmp_type == 3: # destination unreachable
+            # Include original IP header + 8 bytes of data as per RFC
+            ip_pkt_bin = bytearray(msg.data[14:])  # Skip Ethernet header (14 bytes)
+            data_len = min(len(ip_pkt_bin), 28)  # 20 bytes IP header + 8 bytes data
+            icmp_data = icmp.dest_unreach(data=bytes(ip_pkt_bin[:data_len]))
 
-            # Server to external
-            match = parser.OFPMatch(
-                eth_type=ether_types.ETH_TYPE_IP,
-                ipv4_src=self.server_ip,
-                ipv4_dst=self.external_ip,
-                ip_proto=proto
-            )
-            self.add_flow(datapath, 100, match, [])
-        
-        #TODO hosts can only ping their own gateway
+        reply_pkt.add_protocol(icmp.icmp(
+            type_=icmp_type,
+            code=icmp_code,
+            csum=0,
+            data=icmp_data
+        ))
+
+        reply_pkt.serialize()
+        actions = [parser.OFPActionOutput(in_port)]
+        self.logger.info("Router: Sending ICMP type %d, code %d to host %s", icmp_type, icmp_code, src_ip)
+        self.send_packet_out(datapath, ofproto.OFPP_CONTROLLER, actions, reply_pkt.data)        
+
+    def security_check(self, msg, ip_pkt, eth, datapath, in_port, ofproto, parser):
+        src_ip = ip_pkt.src
+        dst_ip = ip_pkt.dst
+        proto = ip_pkt.proto
+        # 1: Block ICMP from/to external host
+        if proto == 1 and (src_ip == self.external_ip or dst_ip == self.external_ip):  # ICMP
+            self.logger.warning("Security: Blocked ICMP from external host %s", src_ip)
+            self.router_icmp_handler(datapath, msg, ofproto, parser, in_port, eth.src, src_ip, None, 3, 1)
+            return False
+         # 2: Block TCP/UDP between external host and server
+        if (proto in [6, 17]) and ((src_ip == self.external_ip and dst_ip == self.server_ip) or \
+               (src_ip == self.server_ip and dst_ip == self.external_ip)):
+            self.logger.warning("Security: Blocked protocol %s between %s and %s", proto, src_ip, dst_ip)
+            return False
+        return True
