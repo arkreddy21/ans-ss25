@@ -33,10 +33,11 @@ class Edge:
 
 # Class for a node in the graph
 class Node:
-	def __init__(self, id, type):
+	def __init__(self, id, type, ip):
 		self.edges = []
 		self.id = id
 		self.type = type
+		self.ip = ip
 
 	# Add an edge connected to another node
 	def add_edge(self, node):
@@ -69,25 +70,26 @@ class Fattree:
 	def generate(self, num_ports):
 
 		# TODO: code for generating the fat-tree topology
+		k = num_ports
 		# core switches
-		for i in range((num_ports//2)**2):
-			self.switches.append(Node(f"s{i}", "switch"))
+		for i in range((k//2)**2):
+			self.switches.append(Node(f"s{i}", "switch", f"10.{k}.{1 + i//(k//2)}.{1 + i%(k//2)}"))
 		# pods
-		for pod in range(num_ports):
-			for i in range(num_ports//2):
+		for pod in range(k):
+			for i in range(k//2):
 				# edge switch (k/2 edge switches in each pod)
-				self.switches.append(Node(f"s{len(self.switches)}", "switch"))
-				# create and connect k/2 servers for each edge switch
-				for j in range(num_ports//2):
-					self.servers.append(Node(f"h{len(self.servers)}", "server"))
+				self.switches.append(Node(f"s{len(self.switches)}", "switch", f"10.{pod}.{i}.1"))
+				# create k/2 servers and connect them to edge switch
+				for j in range(k//2):
+					self.servers.append(Node(f"h{len(self.servers)}", "server", f"10.{pod}.{i}.{2+j}"))
 					self.switches[-1].add_edge(self.servers[-1])
-			for i in range(num_ports//2):
+			for i in range(k//2):
 				# aggregation switch (k/2 aggr switches in each pod)
-				n = Node(f"s{len(self.switches)}", "switch")
+				n = Node(f"s{len(self.switches)}", "switch", f"10.{pod}.{k//2 + i}.1")
 				self.switches.append(n)
 				#link to edge switches
-				for edge_switch in self.switches[-(num_ports//2)-1-i : -1-i]:
+				for edge_switch in self.switches[-(k//2)-1-i : -1-i]:
 					edge_switch.add_edge(self.switches[-1])
 				#link to core switches
-				for core_switch in self.switches[i*(num_ports//2) : (i + 1)*(num_ports//2)]:
+				for core_switch in self.switches[i*(k//2) : (i + 1)*(k//2)]:
 					core_switch.add_edge(self.switches[-1])
