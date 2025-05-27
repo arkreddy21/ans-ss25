@@ -73,19 +73,19 @@ class Fattree:
 		k = num_ports
 		# core switches
 		for i in range((k//2)**2):
-			self.switches.append(Node(f"s{i}", "switch", f"10.{k}.{1 + i//(k//2)}.{1 + i%(k//2)}"))
+			self.switches.append(Node(f"s{i}", "core_switch", f"10.{k}.{1 + i//(k//2)}.{1 + i%(k//2)}"))
 		# pods
 		for pod in range(k):
 			for i in range(k//2):
 				# edge switch (k/2 edge switches in each pod)
-				self.switches.append(Node(f"s{len(self.switches)}", "switch", f"10.{pod}.{i}.1"))
+				self.switches.append(Node(f"s{len(self.switches)}", "edge_switch", f"10.{pod}.{i}.1"))
 				# create k/2 servers and connect them to edge switch
 				for j in range(k//2):
 					self.servers.append(Node(f"h{len(self.servers)}", "server", f"10.{pod}.{i}.{2+j}"))
 					self.switches[-1].add_edge(self.servers[-1])
 			for i in range(k//2):
 				# aggregation switch (k/2 aggr switches in each pod)
-				n = Node(f"s{len(self.switches)}", "switch", f"10.{pod}.{k//2 + i}.1")
+				n = Node(f"s{len(self.switches)}", "aggr_switch", f"10.{pod}.{k//2 + i}.1")
 				self.switches.append(n)
 				#link to edge switches
 				for edge_switch in self.switches[-(k//2)-1-i : -1-i]:

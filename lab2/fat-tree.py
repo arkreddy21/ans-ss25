@@ -48,6 +48,19 @@ class FattreeNet(Topo):
         Topo.__init__(self)
 
         # TODO: please complete the network generation logic here
+        linkopts = dict(bw=15, delay='10ms')
+        for switch in ft_topo.switches:
+            self.addSwitch(switch.id)
+            # add links only for aggregation switches. It's enough to cover the whole network
+            if not switch.type.startswith("aggr"):
+                continue
+            for edge in switch.edges:
+                self.addLink(edge.lnode.id, edge.rnode.id, **linkopts) 
+        for server in ft_topo.servers:
+            self.addHost(server.id, ip=server.ip)
+            # link server to edge switch
+            for edge in server.edges:
+                self.addLink(edge.lnode.id, edge.rnode.id, **linkopts)
 
 
 def make_mininet_instance(graph_topo):
@@ -75,5 +88,6 @@ def run(graph_topo):
 
 
 if __name__ == '__main__':
-    ft_topo = topo.Fattree(4)
+    # ft_topo = topo.Fattree(4)
+    ft_topo = Fattree(4)
     run(ft_topo)
