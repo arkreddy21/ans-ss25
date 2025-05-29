@@ -50,14 +50,14 @@ class FattreeNet(Topo):
         # TODO: please complete the network generation logic here
         linkopts = dict(bw=15, delay='10ms')
         for switch in ft_topo.switches:
-            self.addSwitch(switch.id)
+            self.addSwitch(switch.id, dpid=hex(int(switch.ip))[2:])
             # add links only for aggregation switches. It's enough to cover the whole network
             if not switch.type.startswith("aggr"):
                 continue
             for edge in switch.edges:
                 self.addLink(edge.lnode.id, edge.rnode.id, **linkopts) 
         for server in ft_topo.servers:
-            self.addHost(server.id, ip=server.ip)
+            self.addHost(server.id, ip=str(server.ip))
             # link server to edge switch
             for edge in server.edges:
                 self.addLink(edge.lnode.id, edge.rnode.id, **linkopts)
