@@ -53,7 +53,8 @@ class FTRouter(app_manager.RyuApp):
         self.k = 4
         self.topo_net = topo.Fattree(4)
         # get out_port for a particular switch(dpid) and the destination IP that is directly connected
-        self.dst_to_port = {} # format {(dpid, dst_ip): port}
+        # old format {(dpid, dst_ip): port}
+        self.dst_to_port = {} # format {dpid: {dst_ip: port}}
 
     # Topology discovery
     @set_ev_cls(event.EventSwitchEnter)
@@ -69,11 +70,13 @@ class FTRouter(app_manager.RyuApp):
             # if link.src.dpid == dp.id:
             switch_port = link.src.port_no
             neighbour_ip = IPv4Address(link.dst.dpid)
-            self.dst_to_port[(link.src.dpid, neighbour_ip)] = switch_port
+            self.dst_to_port.setdefault(link.src.dpid, {})
+            self.dst_to_port[link.src.dpid][neighbour_ip] = switch_port
             # elif link.dst.dpid == dp.id:
             switch_port = link.dst.port_no
             neighbour_ip = IPv4Address(link.src.dpid)
-            self.dst_to_port[(link.dst.dpid, neighbour_ip)] = switch_port
+            self.dst_to_port.setdefault(link.dst.dpid, {})
+            self.dst_to_port[link.dst.dpid][neighbour_ip] = switch_port
         # TODO only 63 entries are printing when it should be 80 entries
         # print(self.dst_to_port)
 
@@ -129,7 +132,6 @@ class FTRouter(app_manager.RyuApp):
             print(f"ARP packet {src_ip} -> {dst_ip}, switch {switch_ip}, port {in_port}")
         else: # ignore packets that are neither IP or ARP
             return
-        
 
         # checking the switch and pod numbers in `10.pod.switch.id` pattern
         # Core switch
@@ -138,8 +140,8 @@ class FTRouter(app_manager.RyuApp):
             # also add corresponding flow rule for it
             target_pod = self.get_octet(dst_ip, 1)
             out_port = None
-            for (switch_dpid, ip), port in self.dst_to_port.items():
-                if switch_dpid == dpid and self.get_octet(ip, 1) == target_pod:
+            for ip, port in self.dst_to_port[dpid].items():
+                if self.get_octet(ip, 1) == target_pod:
                     out_port = port
             if out_port == None:
                 print(f"Core switch {dpid} unable to find target out port")
@@ -158,14 +160,16 @@ class FTRouter(app_manager.RyuApp):
             # Same pod - forward to edge switch
             if switch_pod == target_pod:
                 target_switch = self.get_octet(dst_ip, 2)
-                for (switch_dpid, ip), port in self.dst_to_port.items():
-                    if switch_dpid == dpid and self.get_octet(ip, 2) == target_switch:
+                for ip, port in self.dst_to_port[dpid].items():
+                    if self.get_octet(ip, 2) == target_switch:
                         out_port = port
-                if out_port == None:
-                    print(f"Aggr switch {dpid} unable to find target out port")
-                    return
             else: # Different pod. Decide on k/2 core switches
-                pass
+                for ip, port in self.dst_to_port[dpid].items():
+                    if self.get_octet(ip, 1) == self.k and self.get_octet(ip, 3) == self.get_octet(dst_ip, 3) - 1:
+                        out_port = port
+            if out_port == None:
+                print(f"Aggr switch {dpid} unable to find target out port")
+                return
 
             match = parser.OFPMatch(ipv4_dst=dst_ip)
             actions = [parser.OFPActionOutput(out_port)]
@@ -177,13 +181,16 @@ class FTRouter(app_manager.RyuApp):
             # destination is connected to same edge switch
             if (self.get_octet(dst_ip, 2) == self.get_octet(switch_ip, 2)):
                 out_port = self.dst_to_port[(dpid, dst_ip)]
-                match = parser.OFPMatch(ipv4_dst=dst_ip)
-                actions = [parser.OFPActionOutput(out_port)]
-                self.add_flow(datapath, 1, match, actions)
-                self.send_packet_out(datapath, in_port, actions, msg.data)
-            # else forward packet to aggr switch
+            # else forward packet to aggr switch. Distribude based on last octet
             else:
-                pass
+                for ip, port in self.dst_to_port[dpid].items():
+                    if self.get_octet(ip, 2) != self.get_octet(switch_ip, 2) and self.get_octet(ip, 3) - self.k//2 == self.get_octet(dst_ip, 3) - 2:
+                        out_port = port
+            
+            match = parser.OFPMatch(ipv4_dst=dst_ip)
+            actions = [parser.OFPActionOutput(out_port)]
+            self.add_flow(datapath, 1, match, actions)
+            self.send_packet_out(datapath, in_port, actions, msg.data)
 
 
     # Extracts the value of the octet from the IP
