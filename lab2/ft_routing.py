@@ -145,13 +145,15 @@ class FTRouter(app_manager.RyuApp):
                 print(f"Core switch {dpid} unable to find target out port")
                 return
 
-            match = parser.OFPMatch(ipv4_dst=dst_ip)
+            match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=f"10.{target_pod}.0.0/16")
             actions = [parser.OFPActionOutput(out_port)]
+            self.add_flow(datapath, 1, match, actions)
+            match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP, arp_tpa=f"10.{target_pod}.0.0/16")
             self.add_flow(datapath, 1, match, actions)
             self.send_packet_out(datapath, in_port, actions, msg.data)
         
         # Aggregation switch
-        if self.get_octet(switch_ip, 1) < self.k and self.get_octet(switch_ip, 2) >= self.k//2 :
+        elif self.get_octet(switch_ip, 1) < self.k and self.get_octet(switch_ip, 2) >= self.k//2 :
             switch_pod = self.get_octet(switch_ip, 1)
             target_pod = self.get_octet(dst_ip, 1)
             out_port = None
@@ -169,25 +171,34 @@ class FTRouter(app_manager.RyuApp):
                 print(f"Aggr switch {dpid} unable to find target out port")
                 return
 
-            match = parser.OFPMatch(ipv4_dst=dst_ip)
+            match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=str(dst_ip))
             actions = [parser.OFPActionOutput(out_port)]
+            self.add_flow(datapath, 1, match, actions)
+            match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP, arp_tpa=str(dst_ip))
             self.add_flow(datapath, 1, match, actions)
             self.send_packet_out(datapath, in_port, actions, msg.data)
         
         # Edge switch
-        if self.get_octet(switch_ip, 1) < self.k and self.get_octet(switch_ip, 2) < self.k//2:
+        elif self.get_octet(switch_ip, 1) < self.k and self.get_octet(switch_ip, 2) < self.k//2:
             # destination is connected to same edge switch
             if self.get_octet(dst_ip, 1) == self.get_octet(switch_ip, 1) and self.get_octet(dst_ip, 2) == self.get_octet(switch_ip, 2):
                 out_ports = self.get_port_for_ip(dpid, dst_ip)
                 actions = [parser.OFPActionOutput(port) for port in out_ports]
             # else forward packet to aggr switch. Distribude based on last octet
             else:
+                out_port = None
                 for ip, port in self.dst_to_port[dpid].items():
                     if self.get_octet(ip, 2) != self.get_octet(switch_ip, 2) and self.get_octet(ip, 2) - self.k//2 == self.get_octet(dst_ip, 3) - 2:
                         out_port = port
+                        break
+                if out_port is None:
+                    print(f"Edge switch {dpid} unable to find target out port")
+                    return
                 actions = [parser.OFPActionOutput(out_port)]  
             
-            match = parser.OFPMatch(ipv4_dst=dst_ip)
+            match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=str(dst_ip))
+            self.add_flow(datapath, 1, match, actions)
+            match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP, arp_tpa=str(dst_ip))
             self.add_flow(datapath, 1, match, actions)
             self.send_packet_out(datapath, in_port, actions, msg.data)
 
