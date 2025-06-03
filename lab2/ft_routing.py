@@ -163,19 +163,24 @@ class FTRouter(app_manager.RyuApp):
                 for ip, port in self.dst_to_port[dpid].items():
                     if self.get_octet(ip, 1) == switch_pod and self.get_octet(ip, 2) == target_switch:
                         out_port = port
+                match_ip = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=f"{str(dst_ip)}/24")
+                match_arp = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP, arp_tpa=f"{str(dst_ip)}/24")
+                actions = [parser.OFPActionOutput(out_port)]
+                self.add_flow(datapath, 2, match_ip, actions)
+                self.add_flow(datapath, 2, match_arp, actions)
             else: # Different pod. Decide on k/2 core switches
                 for ip, port in self.dst_to_port[dpid].items():
-                    if self.get_octet(ip, 1) == self.k and self.get_octet(ip, 3) == self.get_octet(dst_ip, 3) - 1:
+                    if self.get_octet(ip, 1) == self.k and self.get_octet(ip, 3) == self.get_octet(dst_ip, 2) + 1:
                         out_port = port
+                match_ip = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=f"{str(dst_ip)}/24")
+                match_arp = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP, arp_tpa=f"{str(dst_ip)}/24")
+                actions = [parser.OFPActionOutput(out_port)]
+                self.add_flow(datapath, 1, match_ip, actions)
+                self.add_flow(datapath, 1, match_arp, actions)
             if out_port is None:
                 print(f"Aggr switch {dpid} unable to find target out port")
                 return
-
-            match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=str(dst_ip))
-            actions = [parser.OFPActionOutput(out_port)]
-            self.add_flow(datapath, 1, match, actions)
-            match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP, arp_tpa=str(dst_ip))
-            self.add_flow(datapath, 1, match, actions)
+            
             self.send_packet_out(datapath, in_port, actions, msg.data)
         
         # Edge switch
@@ -184,22 +189,26 @@ class FTRouter(app_manager.RyuApp):
             if self.get_octet(dst_ip, 1) == self.get_octet(switch_ip, 1) and self.get_octet(dst_ip, 2) == self.get_octet(switch_ip, 2):
                 out_ports = self.get_port_for_ip(dpid, dst_ip)
                 actions = [parser.OFPActionOutput(port) for port in out_ports]
+                match_ip = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=str(dst_ip))
+                match_arp = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP, arp_tpa=str(dst_ip))
+                self.add_flow(datapath, 2, match_ip, actions)
+                self.add_flow(datapath, 2, match_arp, actions)
             # else forward packet to aggr switch. Distribude based on last octet
             else:
                 out_port = None
                 for ip, port in self.dst_to_port[dpid].items():
-                    if self.get_octet(ip, 2) != self.get_octet(switch_ip, 2) and self.get_octet(ip, 2) - self.k//2 == self.get_octet(dst_ip, 3) - 2:
+                    if self.get_octet(ip, 2) != self.get_octet(switch_ip, 2) and self.get_octet(ip, 2) - self.k//2 == self.get_octet(dst_ip, 2):
                         out_port = port
                         break
                 if out_port is None:
                     print(f"Edge switch {dpid} unable to find target out port")
                     return
-                actions = [parser.OFPActionOutput(out_port)]  
-            
-            match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=str(dst_ip))
-            self.add_flow(datapath, 1, match, actions)
-            match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP, arp_tpa=str(dst_ip))
-            self.add_flow(datapath, 1, match, actions)
+                actions = [parser.OFPActionOutput(out_port)]
+                match_ip = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=f"{str(dst_ip)}/24")
+                match_arp = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP, arp_tpa=f"{str(dst_ip)}/24")
+                self.add_flow(datapath, 1, match_ip, actions)
+                self.add_flow(datapath, 1, match_arp, actions)
+
             self.send_packet_out(datapath, in_port, actions, msg.data)
 
 
