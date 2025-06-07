@@ -24,6 +24,7 @@
 import os
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import mininet
 import mininet.clean
@@ -48,7 +49,7 @@ class FattreeNet(Topo):
         Topo.__init__(self)
 
         # TODO: please complete the network generation logic here
-        linkopts = dict(bw=15, delay='10ms')
+        linkopts = dict(bw=15, delay='5ms')
         for switch in ft_topo.switches:
             self.addSwitch(switch.id, dpid=hex(int(switch.ip))[2:])
             # add links only for aggregation switches. It's enough to cover the whole network
@@ -83,6 +84,13 @@ def run(graph_topo):
     net.start()
     info('*** Running CLI ***\n')
     CLI(net)
+
+    pairs = [("h0", "h8"), ("h2", "h10"), ("h4", "h12"), ("h6", "h14")]
+    pairs = [(net.get(a_node), net.get(b_node)) for (a_node, b_node) in pairs]
+    info('*** Running Benchmark ***\n')
+    with ThreadPoolExecutor(max_workers=len(graph_topo.switches)) as executor:
+        executor.map(lambda pair: net.iperf(hosts=pair, seconds=10), pairs)
+
     info('*** Stopping network ***\n')
     net.stop()
 

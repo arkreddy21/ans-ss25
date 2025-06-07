@@ -58,11 +58,8 @@ class FTRouter(app_manager.RyuApp):
     # Topology discovery
     @set_ev_cls(event.EventSwitchEnter)
     def get_topology_data(self, ev):
-
-        # Switches and links in the network
         dpid = ev.switch.dp.id
         links = get_link(self, dpid)
-
         for link in links:
             # from switch 1 to switch 2
             switch_port = link.src.port_no
@@ -74,7 +71,7 @@ class FTRouter(app_manager.RyuApp):
             neighbour_ip = IPv4Address(link.src.dpid)
             self.dst_to_port.setdefault(link.dst.dpid, {})
             self.dst_to_port[link.dst.dpid][neighbour_ip] = switch_port
-        print(f"length of dst_to_port map: {len(self.dst_to_port)}")
+        print(f"no. of switches discovered: {len(self.dst_to_port)}")
 
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
@@ -128,72 +125,37 @@ class FTRouter(app_manager.RyuApp):
         else: # ignore packets that are neither IP or ARP
             return
         
-        # learn Host's port mapping
+        # learn Host's port to switch
         self.dst_to_port[dpid][src_ip] = in_port
 
         # check the switch and pod numbers in `10.pod.switch.id` pattern
         # Core switch
         if self.get_octet(switch_ip, 1) == self.k:
-            # forward to correct port based on pod number (10.pod in dst_ip)
-            # also add corresponding flow rule for it
-            target_pod = self.get_octet(dst_ip, 1)
-            out_port = None
-            for ip, port in self.dst_to_port[dpid].items():
-                if self.get_octet(ip, 1) == target_pod:
-                    out_port = port
-            if out_port is None:
-                print(f"Core switch {dpid} unable to find target out port")
-                return
-
-            match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=f"10.{target_pod}.0.0/16")
-            actions = [parser.OFPActionOutput(out_port)]
-            self.add_flow(datapath, 1, match, actions)
-            match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP, arp_tpa=f"10.{target_pod}.0.0/16")
-            self.add_flow(datapath, 1, match, actions)
+            self.populate_core_flows(datapath)
+            actions = [parser.OFPActionOutput(ofproto.OFPP_TABLE)]
             self.send_packet_out(datapath, in_port, actions, msg.data)
         
         # Aggregation switch
-        elif self.get_octet(switch_ip, 1) < self.k and self.get_octet(switch_ip, 2) >= self.k//2 :
-            switch_pod = self.get_octet(switch_ip, 1)
-            target_pod = self.get_octet(dst_ip, 1)
-            out_port = None
-            # Same pod - forward to edge switch
-            if switch_pod == target_pod:
-                target_switch = self.get_octet(dst_ip, 2)
-                for ip, port in self.dst_to_port[dpid].items():
-                    if self.get_octet(ip, 1) == switch_pod and self.get_octet(ip, 2) == target_switch:
-                        out_port = port
-                match_ip = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=f"{str(dst_ip)}/24")
-                match_arp = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP, arp_tpa=f"{str(dst_ip)}/24")
-                actions = [parser.OFPActionOutput(out_port)]
-                self.add_flow(datapath, 2, match_ip, actions)
-                self.add_flow(datapath, 2, match_arp, actions)
-            else: # Different pod. Decide on k/2 core switches
-                for ip, port in self.dst_to_port[dpid].items():
-                    if self.get_octet(ip, 1) == self.k and self.get_octet(ip, 3) == self.get_octet(dst_ip, 2) + 1:
-                        out_port = port
-                match_ip = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=f"{str(dst_ip)}/24")
-                match_arp = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP, arp_tpa=f"{str(dst_ip)}/24")
-                actions = [parser.OFPActionOutput(out_port)]
-                self.add_flow(datapath, 1, match_ip, actions)
-                self.add_flow(datapath, 1, match_arp, actions)
-            if out_port is None:
-                print(f"Aggr switch {dpid} unable to find target out port")
-                return
-            
+        elif self.get_octet(switch_ip, 2) >= self.k//2 :
+            self.populate_aggr_flows(datapath)      
+            actions = [parser.OFPActionOutput(ofproto.OFPP_TABLE)]         
             self.send_packet_out(datapath, in_port, actions, msg.data)
         
         # Edge switch
-        elif self.get_octet(switch_ip, 1) < self.k and self.get_octet(switch_ip, 2) < self.k//2:
+        else:
             # destination is connected to same edge switch
             if self.get_octet(dst_ip, 1) == self.get_octet(switch_ip, 1) and self.get_octet(dst_ip, 2) == self.get_octet(switch_ip, 2):
-                out_ports = self.get_port_for_ip(dpid, dst_ip)
+                if dst_ip in self.dst_to_port[dpid]:
+                    out_ports = [self.dst_to_port[dpid][dst_ip]]
+                else:
+                    out_ports = list(({1,2,3,4} - set(self.dst_to_port[dpid].values())))
                 actions = [parser.OFPActionOutput(port) for port in out_ports]
-                match_ip = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=str(dst_ip))
-                match_arp = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP, arp_tpa=str(dst_ip))
-                self.add_flow(datapath, 2, match_ip, actions)
-                self.add_flow(datapath, 2, match_arp, actions)
-            # else forward packet to aggr switch. Distribude based on last octet
+                if len(out_ports) == 1:
+                    match_ip = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=str(dst_ip))
+                    match_arp = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP, arp_tpa=str(dst_ip))
+                    self.add_flow(datapath, 2, match_ip, actions)
+                    self.add_flow(datapath, 2, match_arp, actions)
+            # else forward packet to aggr switch. Distribude based on switch octet
             else:
                 out_port = None
                 for ip, port in self.dst_to_port[dpid].items():
@@ -210,20 +172,47 @@ class FTRouter(app_manager.RyuApp):
                 self.add_flow(datapath, 1, match_arp, actions)
 
             self.send_packet_out(datapath, in_port, actions, msg.data)
+   
+    def populate_core_flows(self,datapath):
+        dpid = datapath.id
+        parser = datapath.ofproto_parser
+        ip = IPv4Address(dpid)
+        switch = self.get_octet(ip,2)
+        for i in range(self.k):
+            port = self.dst_to_port[dpid][IPv4Address(f"10.{i}.{self.k//2 + switch - 1}.1")]
+            match_ip = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=f"10.{i}.0.0/16")
+            match_arp = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP, arp_tpa=f"10.{i}.0.0/16")
+            actions = [parser.OFPActionOutput(port)]
+            self.add_flow(datapath, 1, match_ip, actions)
+            self.add_flow(datapath, 1, match_arp, actions)
 
+    def populate_aggr_flows(self, datapath):
+        dpid = datapath.id
+        parser = datapath.ofproto_parser
+        ip = IPv4Address(dpid)
+        pod = self.get_octet(ip,1)
+        switch = self.get_octet(ip,2)
+        # add flow rules for ports to edge switches in same pod
+        for i in range(self.k//2):
+            port = self.dst_to_port[dpid][IPv4Address(f"10.{pod}.{i}.1")]
+            match_ip = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=f"10.{pod}.{i}.0/24")
+            match_arp = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP, arp_tpa=f"10.{pod}.{i}.0/24")
+            actions = [parser.OFPActionOutput(port)]
+            self.add_flow(datapath, 2, match_ip, actions)
+            self.add_flow(datapath, 2, match_arp, actions)
+        # add flow rules for ports to core switches. Distribute based on /8 suffix
+        for i in range(2, (self.k//2)+2):
+            port = self.dst_to_port[dpid][IPv4Address(f"10.4.{switch-(self.k//2)+1}.{i-1}")]
+            match_ip = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=(f"0.0.0.{i}","0.0.0.255"))
+            match_arp = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP, arp_tpa=(f"0.0.0.{i}","0.0.0.255"))
+            actions = [parser.OFPActionOutput(port)]
+            self.add_flow(datapath, 1, match_ip, actions)
+            self.add_flow(datapath, 1, match_arp, actions)
 
     def get_octet(self, ip_address, octet_number):
         """Extracts the value of the octet from the IP"""
         return int(str(ip_address).split('.')[octet_number])
-    
-    def get_port_for_ip(self, dpid, ip):
-        """Get port mapping for a given switch and destination IP. Returns a list"""
-        if ip in self.dst_to_port[dpid]:
-            return [self.dst_to_port[dpid][ip]]
-        else:
-            ports = list(({1,2,3,4} - set(self.dst_to_port[dpid].values())))
-            return ports
-    
+      
     def send_packet_out(self, datapath, in_port, actions, data):
         """send packet out message via the given datapath"""
         ofproto = datapath.ofproto
