@@ -73,7 +73,6 @@ class Fattree:
 
 	def generate(self, num_ports):
 
-		# TODO: code for generating the fat-tree topology
 		k = num_ports
 		# core switches
 		for i in range((k//2)**2):
@@ -102,3 +101,68 @@ class Fattree:
 		for node in chain(self.servers, self.switches):
 			if ip == node.ip:
 				return node
+
+	def print_topology_stats(self, k):
+	
+		print(f"=== Fat Tree Topology Statistics (k={k}) ===")
+	
+		# Basic counts
+		core_switches = [s for s in self.switches if s.type == "core_switch"]
+		aggr_switches = [s for s in self.switches if s.type == "aggr_switch"]
+		edge_switches = [s for s in self.switches if s.type == "edge_switch"]
+		print("\nNode Counts:")
+		print(f"  Core switches: {len(core_switches)} (expected: {(k//2)**2})")
+		print(f"  Aggregation switches: {len(aggr_switches)} (expected: {k*(k//2)})")
+		print(f"  Edge switches: {len(edge_switches)} (expected: {k*(k//2)})")
+		print(f"  Servers: {len(self.servers)} (expected: {k**3//4})")
+	
+		# Degree analysis
+		print("\nDegree Analysis:")
+		for switch_type, switches in [("Core", core_switches), ("Aggregation", aggr_switches), ("Edge", edge_switches)]:
+			degrees = [len(s.edges) for s in switches]
+			print(f"  {switch_type} switches - degrees: {set(degrees)}")
+		server_degrees = [len(s.edges) for s in self.servers]
+		print(f"  Servers - degrees: {set(server_degrees)}")
+	
+		# Connectivity checks
+		print("\nConnectivity Checks:")
+	
+		# Check core-to-aggregation connections
+		core_aggr_links = 0
+		for core in core_switches:
+			aggr_neighbors = [n for e in core.edges for n in [e.lnode, e.rnode] 
+							 if n != core and n.type == "aggr_switch"]
+			core_aggr_links += len(aggr_neighbors)
+		print(f"  Core-to-Aggregation links: {core_aggr_links} (expected: {k * (k//2)**2})")
+	
+		# Check aggregation-to-edge connections
+		aggr_edge_links = 0
+		for aggr in aggr_switches:
+			edge_neighbors = [n for e in aggr.edges for n in [e.lnode, e.rnode] 
+							 if n != aggr and n.type == "edge_switch"]
+			aggr_edge_links += len(edge_neighbors)
+		print(f"  Aggregation-to-Edge links: {aggr_edge_links} (expected: {k * (k//2)**2})")
+	
+		# Check edge-to-server connections
+		edge_server_links = 0
+		for edge in edge_switches:
+			server_neighbors = [n for e in edge.edges for n in [e.lnode, e.rnode] 
+							   if n != edge and n.type == "server"]
+			edge_server_links += len(server_neighbors)
+		print(f"  Edge-to-Server links: {edge_server_links} (expected: {k * (k//2)**2})")
+	
+		total_links = sum(len(node.edges) for node in chain(self.servers, self.switches)) // 2
+		expected_links = (k**3//4) * 3
+		print(f"  Total Links: {total_links} (expected: {expected_links})")
+
+		for switch_type, switches in [("Core", core_switches), ("Aggregation", aggr_switches), ("Edge", edge_switches)]:
+			print(f"\n{switch_type} switches")
+			for i, switch in enumerate(switches):
+				neighbors = []
+				for edge in switch.edges:
+					neighbor = edge.rnode if edge.lnode == switch else edge.lnode
+					neighbors.append(neighbor.id)
+				print(f"  {switch.id}: connected to {neighbors}")
+	
+		print("\n=== End Statistics ===")
+	

@@ -106,7 +106,6 @@ class FTRouter(app_manager.RyuApp):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
-        # TODO: handle new packets at the controller
         switch_ip = IPv4Address(dpid)
         in_port = msg.match['in_port']
         pkt = packet.Packet(msg.data)  # raw packet
@@ -145,6 +144,7 @@ class FTRouter(app_manager.RyuApp):
         else:
             # destination is connected to same edge switch
             if self.get_octet(dst_ip, 1) == self.get_octet(switch_ip, 1) and self.get_octet(dst_ip, 2) == self.get_octet(switch_ip, 2):
+                # Get all possible out ports if we don't know the exact port the host is connected to
                 if dst_ip in self.dst_to_port[dpid]:
                     out_ports = [self.dst_to_port[dpid][dst_ip]]
                 else:

@@ -108,7 +108,6 @@ class SPRouter(app_manager.RyuApp):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
     
-        # TODO: handle new packets at the controller
         switch_ip = IPv4Address(dpid)
         in_port = msg.match['in_port']
         pkt = packet.Packet(msg.data)  # raw packet
@@ -133,42 +132,38 @@ class SPRouter(app_manager.RyuApp):
         switch_node = self.topo_net.node_by_ip(switch_ip)
         dst_node = self.topo_net.node_by_ip(dst_ip)
     
-        # Get shortest paths from current switch to all destinations
-        paths = self.single_source_shortest_paths(switch_node, dst_node)
-    
-        if dst_node not in paths:
+        # Get shortest path from current switch to the destination
+        path = self.get_shortest_path(switch_node, dst_node)
+        if path is None:
             print(f"No path found from {switch_ip} to {dst_ip}")
             return
-    
-        path = paths[dst_node]
         print(f"Path from {switch_ip} to {dst_ip}: {[str(node.ip) for node in path]}")
     
         # Case 1: Destination is directly connected to current switch
         if len(path) == 2:  # [current_switch, destination_host]
-            out_ports = self.get_port_for_ip(dpid, dst_ip)
+            # Get all possible out ports if we don't know the exact port the host is connected to
+            if dst_ip in self.dst_to_port[dpid]:
+                out_ports = [self.dst_to_port[dpid][dst_ip]]
+            else:
+                out_ports = list(({1,2,3,4} - set(self.dst_to_port[dpid].values())))
             print(f"Direct connection - out_ports: {out_ports}")
     
             # Send packet out
             actions = [parser.OFPActionOutput(out_port) for out_port in out_ports]
             self.send_packet_out(datapath, ofproto.OFPP_CONTROLLER, actions, msg.data)
-    
             # Install flow rule if we know the exact port
             if len(out_ports) == 1:
                 match_ip = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=str(dst_ip))
                 match_arp = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP, arp_tpa=str(dst_ip))
                 self.add_flow(datapath, 1, match_ip, actions)
                 self.add_flow(datapath, 1, match_arp, actions)
-    
         # Case 2: Multi-hop path - forward to next switch
         else:
             next_hop = path[1]  # Next switch in the path
-            next_hop_ip = IPv4Address(int(next_hop.ip))
-    
             # Get port to next hop switch
-            if next_hop_ip in self.dst_to_port[dpid]:
-                out_port = self.dst_to_port[dpid][next_hop_ip]
-                print(f"Forwarding to next hop switch {next_hop_ip} via port {out_port}")
-    
+            if next_hop.ip in self.dst_to_port[dpid]:
+                out_port = self.dst_to_port[dpid][next_hop.ip]
+                print(f"Forwarding to next hop switch {next_hop.ip} via port {out_port}")
                 # Send packet to next hop
                 actions = [parser.OFPActionOutput(out_port)]
                 match_ip = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=str(dst_ip))
@@ -177,42 +172,37 @@ class SPRouter(app_manager.RyuApp):
                 self.add_flow(datapath, 1, match_arp, actions)
                 self.send_packet_out(datapath, ofproto.OFPP_CONTROLLER, actions, msg.data)
             else:
-                print(f"No port found for next hop {next_hop_ip}")
+                print(f"No port found for next hop {next_hop.ip}")
 
 
-    def single_source_shortest_paths(self, source, sink=None):
+    def get_shortest_path(self, source, dst):
         """
-        Run breadth-first search to find the shortest paths to all (other) servers.
+        Run breadth-first search to find the shortest path between source and destination.
+        Returns the path as a list of nodes, or None if no path exists.
         """
-        shortest_paths = {source: [source]}
-        queue= [source]
-
+        if source == dst:
+            return [source]
+        
         for node in chain(self.topo_net.servers, self.topo_net.switches):
             node.visited = False
-
-        while len(queue) != 0:
-            current_node = queue.pop(0)
-            current_path = shortest_paths[current_node]
-
+        
+        queue = [(source, [source])]  # (current_node, path_to_current_node)
+        source.visited = True
+        
+        while queue:
+            current_node, current_path = queue.pop(0)
+            
             for edge in current_node.edges:
-                neighbor = edge.lnode if edge.lnode is not current_node else edge.rnode
-
+                neighbor = edge.lnode if edge.lnode != current_node else edge.rnode   
                 if not neighbor.visited:
-                    shortest_paths[neighbor] = current_path + [neighbor]
-                    if neighbor is sink:
-                        return shortest_paths
                     neighbor.visited = True
-                    queue.append(neighbor)
+                    new_path = current_path + [neighbor]
+                    if neighbor == dst: # Destination is found
+                        return new_path
+                    queue.append((neighbor, new_path))
+        
+        return None  # No path found
 
-        return shortest_paths
-    
-    def get_port_for_ip(self, dpid, ip):
-        """Get a list of ports to forward a packet to; for a given switch and destination IP"""
-        if ip in self.dst_to_port[dpid]:
-            return [self.dst_to_port[dpid][ip]]
-        else:
-            ports = list(({1,2,3,4} - set(self.dst_to_port[dpid].values())))
-            return ports
 
     def send_packet_out(self, datapath, in_port, actions, data):
         """send packet out message via the given datapath"""

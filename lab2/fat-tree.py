@@ -48,7 +48,6 @@ class FattreeNet(Topo):
 
         Topo.__init__(self)
 
-        # TODO: please complete the network generation logic here
         linkopts = dict(bw=15, delay='5ms')
         for switch in ft_topo.switches:
             self.addSwitch(switch.id, dpid=hex(int(switch.ip))[2:])
@@ -62,6 +61,18 @@ class FattreeNet(Topo):
             # link server to edge switch
             for edge in server.edges:
                 self.addLink(edge.lnode.id, edge.rnode.id, **linkopts)
+
+class FattreeCLI(CLI):
+    """Custom CLI with benchmark command"""
+    
+    def do_benchmark(self, _line):
+        """Run iperf benchmark between predefined host pairs"""
+        pairs = [("h0", "h8"), ("h2", "h10"), ("h4", "h13"), ("h6", "h15")]
+        pairs = [(self.mn.get(a_node), self.mn.get(b_node)) for (a_node, b_node) in pairs]
+        
+        info('*** Running parallel iperf benchmark ***\n')
+        with ThreadPoolExecutor(max_workers=len(pairs)) as executor:
+            executor.map(lambda pair: self.mn.iperf(hosts=pair, seconds=10), pairs)
 
 
 def make_mininet_instance(graph_topo):
@@ -83,19 +94,13 @@ def run(graph_topo):
     info('*** Starting network ***\n')
     net.start()
     info('*** Running CLI ***\n')
-    CLI(net)
-
-    pairs = [("h0", "h8"), ("h2", "h10"), ("h4", "h12"), ("h6", "h14")]
-    pairs = [(net.get(a_node), net.get(b_node)) for (a_node, b_node) in pairs]
-    info('*** Running Benchmark ***\n')
-    with ThreadPoolExecutor(max_workers=len(graph_topo.switches)) as executor:
-        executor.map(lambda pair: net.iperf(hosts=pair, seconds=10), pairs)
+    FattreeCLI(net)
 
     info('*** Stopping network ***\n')
     net.stop()
 
 
 if __name__ == '__main__':
-    # ft_topo = topo.Fattree(4)
     ft_topo = Fattree(4)
+    ft_topo.print_topology_stats(4)
     run(ft_topo)
