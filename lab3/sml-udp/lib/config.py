@@ -1,4 +1,4 @@
-=begin
+"""
 Copyright (c) 2025 Computer Networks Group @ UPB
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
@@ -17,25 +17,22 @@ FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
 COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-=end
+"""
 
-# Vagrant configuration for ANS-SS25 VM
 
-Vagrant.require_version ">= 2.3.0"
 
-Vagrant.configure("2") do |config|
-  config.vm.box = "ubuntu/focal64"
-  config.vm.hostname = "ans-vm"
-  config.ssh.forward_agent = true
-  config.ssh.forward_x11 = true
-  config.vm.box_check_update = false
+import os, sys
 
-  # Specify the memory and CPU cores for the VM
-  config.vm.provider :virtualbox do |vb|
-    vb.memory = 8192    # 8 GB
-    vb.cpus = 8        # 8 cores
-  end
+# get rid of grpc fork-support warnings
+os.environ["GRPC_POLL_STRATEGY"] = "poll"
 
-  # Install the packages and libraries needed by the labs
-  config.vm.provision "shell", path: "./scripts/vm-setup.sh"
-end
+# setup env
+libdir = os.path.join(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(libdir, "p4app/src"))
+os.environ["APP_ROOT"] = os.path.abspath(os.path.join(libdir, "../"))
+os.environ["APP_LOGS"] = os.path.join(os.environ["APP_ROOT"], "logs")
+os.environ["APP_TEST"] = os.path.join(os.environ["APP_LOGS"], "test")
+
+# create the logs dir if not there
+if not os.path.exists(os.environ["APP_LOGS"]):
+    os.makedirs(os.environ["APP_LOGS"])
