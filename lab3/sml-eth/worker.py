@@ -22,15 +22,16 @@
 from lib.gen import GenInts, GenMultipleOfInRange
 from lib.test import CreateTestData, RunIntTest
 from lib.worker import *
-from scapy.all import Packet
+from scapy.all import Packet, ByteField, IntField, FieldListField, Ether, get_if_hwaddr, srp, Raw
 
-NUM_ITER   = 1     # TODO: Make sure your program can handle larger values
-CHUNK_SIZE = None  # TODO: Define me
+NUM_ITER   = 3     # NOTE: Make sure your program can handle larger values
+CHUNK_SIZE = 64
 
 class SwitchML(Packet):
     name = "SwitchMLPacket"
     fields_desc = [
-        # TODO: Implement me
+        ByteField("rank", 0),
+        FieldListField("data", None, IntField("elem",0))
     ]
 
 def AllReduce(iface, rank, data, result):
@@ -44,8 +45,14 @@ def AllReduce(iface, rank, data, result):
 
     This function is blocking, i.e. only returns with a result or error
     """
-    # TODO: Implement me
-    pass
+    for i in range(0, len(data), CHUNK_SIZE):
+        # Create packet
+        packet = Ether(src=get_if_hwaddr(iface), dst="08:00:00:00:ff:ff", type=0x88b5) / SwitchML(rank=rank, data=data[i:i+CHUNK_SIZE])
+        # Send packet and wait for answer
+        answer = srp(packet, iface=iface, verbose=False)
+        raw_data = answer[0][0][1][Raw].load
+        result[i:i+CHUNK_SIZE] = SwitchML(raw_data).data
+        Log(SwitchML(raw_data).data)
 
 def main():
     iface = 'eth0'
