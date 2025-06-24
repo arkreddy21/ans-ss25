@@ -22,16 +22,18 @@
 from lib.gen import GenInts, GenMultipleOfInRange
 from lib.test import CreateTestData, RunIntTest
 from lib.worker import *
-from scapy.all import Packet
+from lib.comm import send, receive
+from scapy.all import Packet, ByteField, IntField, FieldListField
 import socket
 
-NUM_ITER   = 1     # TODO: Make sure your program can handle larger values
-CHUNK_SIZE = None  # TODO: Define me
+NUM_ITER   = 3
+CHUNK_SIZE = 64
 
 class SwitchML(Packet):
     name = "SwitchMLPacket"
     fields_desc = [
-        # TODO: Implement me
+        ByteField("rank", 0),
+        FieldListField("data", None, IntField("elem",0))
     ]
 
 def AllReduce(soc, rank, data, result):
@@ -46,19 +48,25 @@ def AllReduce(soc, rank, data, result):
     This function is blocking, i.e. only returns with a result or error
     """
 
-    # TODO: Implement me
     # NOTE: Do not send/recv directly to/from the socket.
     #       Instead, please use the functions send() and receive() from lib/comm.py
     #       We will use modified versions of these functions to test your program
-    pass
+    for i in range(0, len(data), CHUNK_SIZE):
+        # Send packet
+        payload = bytes(SwitchML(rank=rank, data=data[i:i+CHUNK_SIZE]))
+        send(soc, payload, ("10.0.1.1", 50505))
+        # Receive answer
+        rec_packet, _ = receive(soc, 1024)
+        result[i:i+CHUNK_SIZE] = SwitchML(rec_packet).data
+        Log(SwitchML(rec_packet).data)
 
 def main():
     rank = GetRankOrExit()
 
-    s = None # TODO: Create a UDP socket. 
-    # NOTE: This socket will be used for all AllReduce calls.
-    #       Feel free to go with a different design (e.g. multiple sockets)
-    #       if you want to, but make sure the loop below still works
+    # Create a UDP socket. 
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    #NOTE: using empty ip to receive broadcast packets
+    s.bind(("", 50505))
 
     Log("Started...")
     for i in range(NUM_ITER):
