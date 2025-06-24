@@ -79,19 +79,25 @@ parser TheParser(packet_in packet,
 
 /******** Ingress Processing ********/
 
-tuple<bool, bool> atomic_bitmap_action(register<bit<64>> bitmap, in worker_id_t i_worker) {
-  bit<64> old_bitmap_value;
-  bit<64> new_bitmap_value;
+bool check_first_arrival(register<bit<32>> bitmap, in worker_id_t i_worker) {
+  bit<32> old_bitmap_value;
   @atomic {
     bitmap.read(old_bitmap_value, 0);
-    new_bitmap_value = old_bitmap_value | (64w1 << i_worker);
+    bit<32> new_bitmap_value = old_bitmap_value | (32w1 << i_worker);
     bitmap.write(0, new_bitmap_value);
   };
-  // check if entry from this worker is valid (not a duplicate)
-  bool valid_entry = (old_bitmap_value & (64w1 << i_worker)) == 0;
-  // check if this is the last worker for this round
-  bool last_entry = new_bitmap_value == ((64w1 << n_workers) - 1); 
-  return { valid_entry, last_entry };
+  return (old_bitmap_value & (32w1 << i_worker)) == 0;
+}
+
+bool check_all_completed(register<bit<32>> bitmap, in worker_id_t i_worker) {
+  bit<32> new_bitmap_value;
+  @atomic {
+    bit<32> old_bitmap_value;
+    bitmap.read(old_bitmap_value, 0);
+    new_bitmap_value = old_bitmap_value | (32w1 << i_worker);
+    bitmap.write(0, new_bitmap_value);
+  };
+  return new_bitmap_value == ((32w1 << n_workers) - 1);
 }
 
 control TheIngress(inout headers hdr,
@@ -121,38 +127,34 @@ control TheIngress(inout headers hdr,
     default_action = drop_eth_packet();
   }
 
-  register<bit<64>>(1) arrival_bitmap;
+  register<bit<32>>(1) arrival_bitmap;
   register<chunk_t>(1) accumulated_chunk;
-  register<bit<64>>(1) completion_bitmap;
+  register<bit<32>>(1) completion_bitmap;
 
   apply {
-    if(!hdr.eth.isValid()) {
+    if (!hdr.eth.isValid()) {
       mark_to_drop(standard_metadata);
-      return;
     }
-    if(!(hdr.eth.dst == accumulator_mac)) {
+    else if (!(hdr.eth.dst == accumulator_mac)) {
       eth_exact.apply();
-      return;
     }
-    if(hdr.sml.isValid()) {
-      // Check that this is the first packet from this worker.
-      tuple<bool, bool> arrival_result = atomic_bitmap_action(arrival_bitmap, hdr.sml.rank);
-      if (!arrival_result[0]) {
+    else if (hdr.sml.isValid()) {
+      // Check if this is the first packet from this worker.
+      if (!check_first_arrival(arrival_bitmap, hdr.sml.rank)) {
         mark_to_drop(standard_metadata);
         return;
       }
       
       // Accumulate
       @atomic {
-        bit<2048> old_value;
+        chunk_t old_value;
         accumulated_chunk.read(old_value, 0);
-        bit<2048> new_value = old_value + hdr.sml.chunk;
+        chunk_t new_value = old_value + hdr.sml.chunk;
         accumulated_chunk.write(0, new_value);
       }
 
-      // Check whether this chunk is the last one for this round
-      tuple<bool, bool> accum_result = atomic_bitmap_action(completion_bitmap, hdr.sml.rank);
-      if (!accum_result[1]) {
+      // Check if all the chunks in this round are accumulated
+      if (!check_all_completed(completion_bitmap, hdr.sml.rank)) {
         mark_to_drop(standard_metadata);
         return;
       }
@@ -178,7 +180,7 @@ control TheEgress(inout headers hdr,
     if (standard_metadata.mcast_grp == 1) {
       hdr.eth.dst = 0xffffffffffff;
       // Broadcasting an accumulation result.
-      if(hdr.sml.isValid()) {
+      if (hdr.sml.isValid()) {
         hdr.sml.rank = 0xff;
         hdr.eth.src = accumulator_mac;
       }
