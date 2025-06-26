@@ -205,15 +205,7 @@ control TheIngress(inout headers hdr,
       hdr.eth.dst = hdr.eth.src;
       hdr.eth.src = accumulator_mac;
     }
-    else if (hdr.sml.isValid()) {
-      // Check that address and port information in SwitchML packet is valid.
-      if (hdr.eth.dst != accumulator_mac || 
-          hdr.ipv4.dst_addr != accumulator_ip || 
-          hdr.udp.dst_port != accumulator_port) {
-        mark_to_drop(standard_metadata);
-        return;
-      }
-
+    else if (hdr.sml.isValid() && hdr.eth.dst == accumulator_mac && hdr.ipv4.dst_addr == accumulator_ip) {
       // Check if this is the first packet from this worker.
       if (!check_first_arrival(arrival_bitmap, hdr.sml.rank)) {
         mark_to_drop(standard_metadata);

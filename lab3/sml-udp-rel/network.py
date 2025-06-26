@@ -25,13 +25,19 @@ from mininet.topo import Topo
 from mininet.cli import CLI
 import os
 
-NUM_WORKERS = 2 # TODO: Make sure your program can handle larger values
+NUM_WORKERS = 8
 
 class SMLTopo(Topo):
-    def __init__(self, **opts):
+    def __init__(self, num_workers, **opts):
         Topo.__init__(self, **opts)
-        # TODO: Implement me. Feel free to modify the constructor signature
-        # NOTE: Make sure worker names are consistent with RunWorkers() below
+        # Make sure worker names are consistent with RunWorkers() below
+        self.switch = self.addSwitch("s1")
+        self.workers = [
+            self.addHost(f"w{i}", ip=f"10.0.0.{i+1}", mac=f"08:00:00:00:00:{i+1:02x}")
+            for i in range(num_workers)
+        ]
+        for worker in self.workers:
+            self.addLink(self.switch, worker)
 
 def RunWorkers(net):
     """
@@ -51,10 +57,27 @@ def RunControlPlane(net):
     """
     One-time control plane configuration
     """
-    # TODO: Implement me (if needed)
-    pass
+    switch = net.get("s1")
 
-topo = None # TODO: Create an SMLTopo instance
+    # Ethernet forwarding configuration
+    for i in range(NUM_WORKERS):
+        switch.insertTableEntry(
+            table_name="TheIngress.eth_exact",
+            match_fields={"hdr.eth.dst": f"08:00:00:00:00:{i+1:02x}"},
+            action_name="TheIngress.forward_eth_packet",
+            action_params={"out_port": i+1}
+        )
+    switch.insertTableEntry(
+        table_name="TheIngress.eth_exact",
+        match_fields={"hdr.eth.dst": "ff:ff:ff:ff:ff:ff"},
+        action_name="TheIngress.broadcast_eth_packet"
+    )
+
+    # SML result broadcast configuration
+    switch.addMulticastGroup(mgid=1, ports=range(1, NUM_WORKERS+1))
+
+
+topo = SMLTopo(NUM_WORKERS)
 net = P4Mininet(program="p4/main.p4", topo=topo)
 net.run_control_plane = lambda: RunControlPlane(net)
 net.run_workers = lambda: RunWorkers(net)

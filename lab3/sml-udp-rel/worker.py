@@ -22,16 +22,20 @@
 from lib.gen import GenInts, GenMultipleOfInRange
 from lib.test import CreateTestData, RunIntTest
 from lib.worker import *
-from scapy.all import Packet
+from scapy.all import Packet, ByteField, IntField, FieldListField
 import socket
 
-NUM_ITER   = 1     # TODO: Make sure your program can handle larger values
-CHUNK_SIZE = None  # TODO: Define me
+NUM_ITER   = 3
+CHUNK_SIZE = 64
+TIMEOUT = 1
 
 class SwitchML(Packet):
     name = "SwitchMLPacket"
     fields_desc = [
-        # TODO: Implement me
+        ByteField("rank", 0),
+        ByteField("ackId", 0),
+        ByteField("chunkId", 0),
+        FieldListField("data", None, IntField("elem",0))
     ]
 
 def AllReduce(soc, rank, data, result):
@@ -53,15 +57,46 @@ def AllReduce(soc, rank, data, result):
     #
     #       You may use the functions unreliable_send() and unreliable_receive()
     #       to test how your solution handles dropped/delayed packets
-    pass
+    
+    ackId = 0xff  # Initially no previous chunk to ack
+    for i in range(0, len(data), CHUNK_SIZE):
+        # Create packet
+        chunkId = int(i / CHUNK_SIZE)
+        payload = bytes(SwitchML(rank=rank, ackId=ackId, chunkId=chunkId, data=data[i:i+CHUNK_SIZE]))
+        ackId = chunkId # Next packet will ack this chunk
+
+        while True:
+            unreliable_send(soc, payload, ("10.0.1.1", 50505))
+
+            # Try to receive packet. Send again if failed
+            try:
+                rec_packet, _ = unreliable_receive(soc, 1024)
+            except socket.timeout:
+                Log(f"Worker {rank}: Socket Timeout")
+                continue
+            
+            rec_packet = SwitchML(rec_packet)
+            if rec_packet.rank != 0xFF or rec_packet.chunkId != chunkId:
+                Log(f"Worker {rank}: Illegal/duplicate packet")
+                continue
+
+            # Store results
+            result[i:i+CHUNK_SIZE] = rec_packet.data
+            Log(rec_packet.data)
+            break
+
+    # Send acknowledgement for the last chunk
+    # chunkId=0xff to signify there is no chunk data. This is just an acknowledgement
+    final_ack = bytes(SwitchML(rank=rank, chunkId=0xff, ackId=ackId))
+    send(soc, final_ack, ("10.0.1.1", 50505))
 
 def main():
     rank = GetRankOrExit()
 
-    s = None # TODO: Create a UDP socket. 
-    # NOTE: This socket will be used for all AllReduce calls.
-    #       Feel free to go with a different design (e.g. multiple sockets)
-    #       if you want to, but make sure the loop below still works
+    # Create a UDP socket. 
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.bind(("", 50505))
+    s.settimeout(TIMEOUT)
 
     Log("Started...")
     for i in range(NUM_ITER):
