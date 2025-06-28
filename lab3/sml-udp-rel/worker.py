@@ -21,7 +21,8 @@
 
 from lib.gen import GenInts, GenMultipleOfInRange
 from lib.test import CreateTestData, RunIntTest
-from lib.worker import *
+from lib.worker import GetRankOrExit, Log
+from lib.comm import send, receive, unreliable_send, unreliable_receive
 from scapy.all import Packet, ByteField, IntField, FieldListField
 import socket
 
@@ -33,7 +34,6 @@ class SwitchML(Packet):
     name = "SwitchMLPacket"
     fields_desc = [
         ByteField("rank", 0),
-        ByteField("ackId", 0),
         ByteField("chunkId", 0),
         FieldListField("data", None, IntField("elem",0))
     ]
@@ -58,12 +58,9 @@ def AllReduce(soc, rank, data, result):
     #       You may use the functions unreliable_send() and unreliable_receive()
     #       to test how your solution handles dropped/delayed packets
     
-    ackId = 0xff  # Initially no previous chunk to ack
     for i in range(0, len(data), CHUNK_SIZE):
-        # Create packet
         chunkId = int(i / CHUNK_SIZE)
-        payload = bytes(SwitchML(rank=rank, ackId=ackId, chunkId=chunkId, data=data[i:i+CHUNK_SIZE]))
-        ackId = chunkId # Next packet will ack this chunk
+        payload = bytes(SwitchML(rank=rank, chunkId=chunkId, data=data[i:i+CHUNK_SIZE]))
 
         while True:
             unreliable_send(soc, payload, ("10.0.1.1", 50505))
@@ -85,10 +82,23 @@ def AllReduce(soc, rank, data, result):
             Log(rec_packet.data)
             break
 
-    # Send acknowledgement for the last chunk
+    # Send acknowledgement for the last chunk and wait for switch to ack back
     # chunkId=0xff to signify there is no chunk data. This is just an acknowledgement
-    final_ack = bytes(SwitchML(rank=rank, chunkId=0xff, ackId=ackId))
-    send(soc, final_ack, ("10.0.1.1", 50505))
+    final_ack = bytes(SwitchML(rank=rank, chunkId=0xff, data=[0 for j in range(CHUNK_SIZE)]))
+    while True:
+        unreliable_send(soc, final_ack, ("10.0.1.1", 50505))
+        try:
+            rec_packet, _ = unreliable_receive(soc, 1024)
+        except socket.timeout:
+            Log(f"Worker {rank}: Socket Timeout at final ack")
+            continue
+        rec_packet = SwitchML(rec_packet)
+        if rec_packet.rank != 0xFF or rec_packet.chunkId != 0xFF:
+            Log(f"Worker {rank}: Illegal/duplicate packet at final ack")
+            continue
+        Log(f"Worker {rank}: Final Ack Done")
+        break
+    
 
 def main():
     rank = GetRankOrExit()

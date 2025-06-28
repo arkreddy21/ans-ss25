@@ -26,7 +26,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 typedef bit<9>  sw_port_t;   /*< Switch port */
 typedef bit<48> mac_addr_t;  /*< MAC address */
-typedef bit<32> ip4_addr_t;  /*< IPv4 address */
+typedef bit<32> ipv4_addr_t;  /*< IPv4 address */
 
 typedef bit<8> worker_id_t; /*< Worker IDs */
 typedef bit<2048> chunk_t; /* Chunk size 64*32 */
@@ -79,7 +79,6 @@ header udp_t {
 
 header sml_t {
   worker_id_t rank;
-  bit<8> ack_id;
   bit<8> chunk_id;
   chunk_t chunk;
 }
@@ -138,6 +137,26 @@ parser TheParser(packet_in packet,
   }
 }
 
+bool check_first_arrival(register<bit<8>> bitmap, in worker_id_t i_worker) {
+  bit<8> old_bitmap_value;
+  @atomic {
+    bitmap.read(old_bitmap_value, 0);
+    bit<8> new_bitmap_value = old_bitmap_value | (8w1 << i_worker);
+    bitmap.write(0, new_bitmap_value);
+  };
+  return (old_bitmap_value & (8w1 << i_worker)) == 0;
+}
+
+bool check_all_completed(register<bit<8>> bitmap, in worker_id_t i_worker) {
+  bit<8> new_bitmap_value;
+  @atomic {
+    bit<8> old_bitmap_value;
+    bitmap.read(old_bitmap_value, 0);
+    new_bitmap_value = old_bitmap_value | (8w1 << i_worker);
+    bitmap.write(0, new_bitmap_value);
+  };
+  return new_bitmap_value == 8w0xff;
+}
 
 control TheIngress(inout headers hdr,
                    inout metadata meta,
@@ -166,14 +185,13 @@ control TheIngress(inout headers hdr,
     default_action = drop_eth_packet();
   }
 
-  // maintain 2 slots for current and previous accumulation
-  register<bit<32>>(2) completion_bitmap;
-  register<bit<32>>(2) ack_bitmap;
-  register<bit<8>>(2) chunk_id;
-  register<chunk_t>(2) accumulated_chunk;
+  register<bit<8>>(1) arrival_bitmap;
+  register<bit<8>>(1) completion_bitmap;
+  register<bit<8>>(1) chunk_id;
+  register<chunk_t>(1) accumulated_chunk;
+  register<chunk_t>(1) prev_chunk;
 
   apply {
-    /* TODO: Implement me */
     if (standard_metadata.checksum_error == 1 || !hdr.eth.isValid()) {
       mark_to_drop(standard_metadata);
     }
@@ -189,17 +207,66 @@ control TheIngress(inout headers hdr,
       hdr.eth.src = accumulator_mac;
     }
     else if (hdr.sml.isValid() && hdr.eth.dst == accumulator_mac && hdr.ipv4.dst_addr == accumulator_ip) {
+      bit<8> exp_chunk_id;
+      chunk_id.read(exp_chunk_id, 0);
 
-      // Handle Acknowledgements
-      if (hdr.sml.ack_id != 0xff) {
-
+      // Workers acknowledging final result
+      if(hdr.sml.chunk_id == 0xff) {
+        chunk_id.write(0, 0);  // reset chunk_id to start next iteration
+        hdr.eth.dst = hdr.eth.src;
+        hdr.eth.src = accumulator_mac;
+        hdr.ipv4.dst_addr = hdr.ipv4.src_addr;
+        hdr.ipv4.src_addr = accumulator_ip;
+        hdr.sml.rank = 0xff;
+        hdr.sml.chunk_id = 0xff;
+        standard_metadata.egress_spec = standard_metadata.ingress_port;
+        return;
       }
 
-      // Handle data packets
-      if (hdr.sml.chunk_id != ff) {
-
+      // Worker send a chunk of previous round again, expecting result
+      if(hdr.sml.chunk_id - exp_chunk_id != 0) {
+          hdr.eth.dst = hdr.eth.src;
+          hdr.eth.src = accumulator_mac;
+          hdr.ipv4.dst_addr = hdr.ipv4.src_addr;
+          hdr.ipv4.src_addr = accumulator_ip;
+          prev_chunk.read(hdr.sml.chunk, 0);
+          hdr.sml.rank = 0xff;
+          standard_metadata.egress_spec = standard_metadata.ingress_port; // Reflect packet
+          return;
       }
 
+      // Check if this is the first packet from this worker.
+      if (!check_first_arrival(arrival_bitmap, hdr.sml.rank)) {
+        mark_to_drop(standard_metadata);
+        return;
+      }
+
+      // Accumulate
+      @atomic {
+        chunk_t old_value;
+        accumulated_chunk.read(old_value, 0);
+        chunk_t new_value = old_value + hdr.sml.chunk;
+        accumulated_chunk.write(0, new_value);
+      }
+
+      // Check if all the chunks in this round are accumulated
+      if (!check_all_completed(completion_bitmap, hdr.sml.rank)) {
+        mark_to_drop(standard_metadata);
+        return;
+      }
+
+      // Broadcast result
+      chunk_t result;
+      accumulated_chunk.read(result, 0);
+      hdr.sml.chunk = result;
+      prev_chunk.write(0, result);
+      standard_metadata.mcast_grp = 1;
+
+      // Reset memory
+      arrival_bitmap.write(0, 0);
+      completion_bitmap.write(0, 0);
+      accumulated_chunk.write(0, 0);
+      chunk_id.write(0, exp_chunk_id+1);
     }
     else {
       eth_exact.apply();
@@ -243,7 +310,7 @@ control TheChecksumVerification(inout headers hdr, inout metadata meta) {
       {
         hdr.ipv4.src_addr, hdr.ipv4.dst_addr, 8w0, hdr.ipv4.protocol,
         hdr.udp.len, hdr.udp.src_port, hdr.udp.dst_port, hdr.udp.len,
-        hdr.sml.rank, hdr.sml.ack_id, hdr.sml.chunk_id, hdr.sml.chunk
+        hdr.sml.rank, hdr.sml.chunk_id, hdr.sml.chunk
       },
       hdr.udp.checksum,
       HashAlgorithm.csum16
@@ -270,7 +337,7 @@ control TheChecksumComputation(inout headers  hdr, inout metadata meta) {
       {
         hdr.ipv4.src_addr, hdr.ipv4.dst_addr, 8w0, hdr.ipv4.protocol,
         hdr.udp.len, hdr.udp.src_port, hdr.udp.dst_port, hdr.udp.len,
-        hdr.sml.rank, hdr.sml.ack_id, hdr.sml.chunk_id, hdr.sml.chunk
+        hdr.sml.rank, hdr.sml.chunk_id, hdr.sml.chunk
       },
       hdr.udp.checksum,
       HashAlgorithm.csum16
