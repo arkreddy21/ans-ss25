@@ -79,25 +79,25 @@ parser TheParser(packet_in packet,
 
 /******** Ingress Processing ********/
 
-bool check_first_arrival(register<bit<32>> bitmap, in worker_id_t i_worker) {
-  bit<32> old_bitmap_value;
+bool check_first_arrival(register<bit<8>> bitmap, in worker_id_t i_worker) {
+  bit<8> old_bitmap_value;
   @atomic {
     bitmap.read(old_bitmap_value, 0);
-    bit<32> new_bitmap_value = old_bitmap_value | (32w1 << i_worker);
+    bit<8> new_bitmap_value = old_bitmap_value | (8w1 << i_worker);
     bitmap.write(0, new_bitmap_value);
   };
-  return (old_bitmap_value & (32w1 << i_worker)) == 0;
+  return (old_bitmap_value & (8w1 << i_worker)) == 0;
 }
 
-bool check_all_completed(register<bit<32>> bitmap, in worker_id_t i_worker) {
-  bit<32> new_bitmap_value;
+bool check_all_completed(register<bit<8>> bitmap, in worker_id_t i_worker) {
+  bit<8> new_bitmap_value;
   @atomic {
-    bit<32> old_bitmap_value;
+    bit<8> old_bitmap_value;
     bitmap.read(old_bitmap_value, 0);
-    new_bitmap_value = old_bitmap_value | (32w1 << i_worker);
+    new_bitmap_value = old_bitmap_value | (8w1 << i_worker);
     bitmap.write(0, new_bitmap_value);
   };
-  return new_bitmap_value == ((32w1 << n_workers) - 1);
+  return new_bitmap_value == 8w0xff;
 }
 
 control TheIngress(inout headers hdr,
@@ -127,9 +127,9 @@ control TheIngress(inout headers hdr,
     default_action = drop_eth_packet();
   }
 
-  register<bit<32>>(1) arrival_bitmap;
+  register<bit<8>>(1) arrival_bitmap;
   register<chunk_t>(1) accumulated_chunk;
-  register<bit<32>>(1) completion_bitmap;
+  register<bit<8>>(1) completion_bitmap;
 
   apply {
     if (!hdr.eth.isValid()) {
