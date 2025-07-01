@@ -146,10 +146,11 @@ control TheIngress(inout headers hdr,
       }
       
       // Accumulate
+      chunk_t old_value;
+      chunk_t new_value;
       @atomic {
-        chunk_t old_value;
         accumulated_chunk.read(old_value, 0);
-        chunk_t new_value = old_value + hdr.sml.chunk;
+        new_value = old_value + hdr.sml.chunk;
         accumulated_chunk.write(0, new_value);
       }
 
@@ -159,14 +160,12 @@ control TheIngress(inout headers hdr,
         return;
       }
 
-      // Last Accumulation. Load result and reset memory.
-      accumulated_chunk.read(hdr.sml.chunk, 0);
+      // Accumulation done. Broadcast result and reset memory
+      hdr.sml.chunk = new_value;
+      standard_metadata.mcast_grp = 1;
       arrival_bitmap.write(0, 0);
       completion_bitmap.write(0, 0);
       accumulated_chunk.write(0, 0);
-
-      // Broadcast result
-      standard_metadata.mcast_grp = 1;
     }
   }
 }
@@ -179,11 +178,10 @@ control TheEgress(inout headers hdr,
   apply {
     if (standard_metadata.mcast_grp == 1) {
       hdr.eth.dst = 0xffffffffffff;
-      // Broadcasting an accumulation result.
-      if (hdr.sml.isValid()) {
-        hdr.sml.rank = 0xff;
-        hdr.eth.src = accumulator_mac;
-      }
+    }
+    if (hdr.sml.isValid()) {
+      hdr.sml.rank = 0xff;
+      hdr.eth.src = accumulator_mac;
     }
   }
 }

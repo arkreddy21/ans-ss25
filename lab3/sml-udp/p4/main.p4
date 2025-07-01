@@ -195,8 +195,7 @@ control TheIngress(inout headers hdr,
       mark_to_drop(standard_metadata);
     }
     else if (hdr.arp.isValid() && hdr.arp.operation == 1 && hdr.arp.target_ip == accumulator_ip) {
-      // Accumulator's MAC address was requested
-      standard_metadata.egress_spec = standard_metadata.ingress_port; // Reflect packet
+      // Accumulator's MAC address was requested. Send back ARP response
       hdr.arp.operation = 2;
       hdr.arp.target_mac = hdr.arp.sender_mac;
       hdr.arp.target_ip = hdr.arp.sender_ip;
@@ -204,6 +203,7 @@ control TheIngress(inout headers hdr,
       hdr.arp.sender_ip = accumulator_ip;
       hdr.eth.dst = hdr.eth.src;
       hdr.eth.src = accumulator_mac;
+      standard_metadata.egress_spec = standard_metadata.ingress_port;
     }
     else if (hdr.sml.isValid() && hdr.eth.dst == accumulator_mac && hdr.ipv4.dst_addr == accumulator_ip) {
       // Check if this is the first packet from this worker.
@@ -213,10 +213,11 @@ control TheIngress(inout headers hdr,
       }
 
       // Accumulate
+      chunk_t old_value;
+      chunk_t new_value;
       @atomic {
-        chunk_t old_value;
         accumulated_chunk.read(old_value, 0);
-        chunk_t new_value = old_value + hdr.sml.chunk;
+        new_value = old_value + hdr.sml.chunk;
         accumulated_chunk.write(0, new_value);
       }
 
@@ -226,14 +227,12 @@ control TheIngress(inout headers hdr,
         return;
       }
 
-      // Broadcast result
-      accumulated_chunk.read(hdr.sml.chunk, 0);
+      // Accumulation done. Broadcast result and reset memory
+      hdr.sml.chunk = new_value;
       standard_metadata.mcast_grp = 1;
-
-      // Reset memory
+      arrival_bitmap.write(0, 0);
       completion_bitmap.write(0, 0);
       accumulated_chunk.write(0, 0);
-      arrival_bitmap.write(0, 0);
     }
     else {
       eth_exact.apply();
@@ -249,12 +248,11 @@ control TheEgress(inout headers hdr,
     if (standard_metadata.mcast_grp == 1) {
       hdr.eth.dst = 0xffffffffffff;
       hdr.ipv4.dst_addr = 0xffffffff;
-      // Broadcasting an accumulation result.
-      if(hdr.sml.isValid()) {
-        hdr.sml.rank = 0xff;
-        hdr.eth.src = accumulator_mac;
-        hdr.ipv4.src_addr = accumulator_ip;
-      }
+    }
+    if (hdr.sml.isValid()) {
+      hdr.sml.rank = 0xff;
+      hdr.eth.src = accumulator_mac;
+      hdr.ipv4.src_addr = accumulator_ip;
     }
   }
 }

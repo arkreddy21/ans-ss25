@@ -52,13 +52,12 @@ def AllReduce(soc, rank, data, result):
     #       Instead, please use the functions send() and receive() from lib/comm.py
     #       We will use modified versions of these functions to test your program
     for i in range(0, len(data), CHUNK_SIZE):
-        # Send packet
+        # Send packet and wait for response
         payload = bytes(SwitchML(rank=rank, data=data[i:i+CHUNK_SIZE]))
         send(soc, payload, ("10.0.1.1", 50505))
-        # Receive answer
-        rec_packet, _ = receive(soc, 1024)
-        result[i:i+CHUNK_SIZE] = SwitchML(rec_packet).data
-        Log(SwitchML(rec_packet).data)
+        res_packet, _ = receive(soc, 1024)
+        result[i:i+CHUNK_SIZE] = SwitchML(res_packet).data
+        Log(SwitchML(res_packet).data)
 
 def main():
     rank = GetRankOrExit()

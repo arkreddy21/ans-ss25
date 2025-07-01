@@ -28,13 +28,13 @@ import os
 NUM_WORKERS = 8
 
 class SMLTopo(Topo):
-    def __init__(self, num_workers, **opts):
+    def __init__(self, **opts):
         Topo.__init__(self, **opts)
         # Make sure worker names are consistent with RunWorkers() below
         self.switch = self.addSwitch("s1")
         self.workers = [
             self.addHost(f"w{i}", ip=f"10.0.0.{i+1}", mac=f"08:00:00:00:00:{i+1:02x}")
-            for i in range(num_workers)
+            for i in range(NUM_WORKERS)
         ]
         for worker in self.workers:
             self.addLink(self.switch, worker)
@@ -59,7 +59,7 @@ def RunControlPlane(net):
     """
     switch = net.get("s1")
 
-    # Ethernet forwarding configuration
+    # Ethernet forwarding rules
     for i in range(NUM_WORKERS):
         switch.insertTableEntry(
             table_name="TheIngress.eth_exact",
@@ -73,11 +73,11 @@ def RunControlPlane(net):
         action_name="TheIngress.broadcast_eth_packet"
     )
 
-    # SML result broadcast configuration
+    # Broadcast group for SML results
     switch.addMulticastGroup(mgid=1, ports=range(1, NUM_WORKERS+1))
 
 
-topo = SMLTopo(NUM_WORKERS)
+topo = SMLTopo()
 net = P4Mininet(program="p4/main.p4", topo=topo)
 net.run_control_plane = lambda: RunControlPlane(net)
 net.run_workers = lambda: RunWorkers(net)
