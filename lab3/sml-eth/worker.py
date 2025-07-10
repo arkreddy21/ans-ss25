@@ -31,7 +31,7 @@ class SwitchML(Packet):
     name = "SwitchMLPacket"
     fields_desc = [
         ByteField("rank", 0),
-        FieldListField("data", None, IntField("elem",0))
+        FieldListField("chunk", None, IntField("num",0))
     ]
 
 def AllReduce(iface, rank, data, result):
@@ -47,12 +47,12 @@ def AllReduce(iface, rank, data, result):
     """
     for i in range(0, len(data), CHUNK_SIZE):
         # Create packet
-        packet = Ether(src=get_if_hwaddr(iface), dst="08:00:00:00:ff:ff", type=0x88b5) / SwitchML(rank=rank, data=data[i:i+CHUNK_SIZE])
+        packet = Ether(src=get_if_hwaddr(iface), dst="08:00:00:00:ff:ff", type=0x88b5) / SwitchML(rank=rank, chunk=data[i:i+CHUNK_SIZE])
         # Send packet and wait for response
         response = srp(packet, iface=iface, verbose=False)
         raw_data = response[0][0][1][Raw].load
-        result[i:i+CHUNK_SIZE] = SwitchML(raw_data).data
-        Log(SwitchML(raw_data).data)
+        result[i:i+CHUNK_SIZE] = SwitchML(raw_data).chunk
+        Log(SwitchML(raw_data).chunk)
 
 def main():
     iface = 'eth0'

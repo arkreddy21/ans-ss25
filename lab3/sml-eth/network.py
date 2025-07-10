@@ -58,21 +58,6 @@ def RunControlPlane(net):
     One-time control plane configuration
     """
     switch = net.get("s1")
-
-    # Ethernet forwarding rules
-    for i in range(NUM_WORKERS):
-        switch.insertTableEntry(
-            table_name="TheIngress.eth_exact",
-            match_fields={"hdr.eth.dst": f"08:00:00:00:00:{i+1:02x}"},
-            action_name="TheIngress.forward_eth_packet",
-            action_params={"out_port": i+1}
-        )
-    switch.insertTableEntry(
-        table_name="TheIngress.eth_exact",
-        match_fields={"hdr.eth.dst": "ff:ff:ff:ff:ff:ff"},
-        action_name="TheIngress.broadcast_eth_packet"
-    )
-
     # Broadcast group for SML results
     switch.addMulticastGroup(mgid=1, ports=range(1, NUM_WORKERS+1))
 

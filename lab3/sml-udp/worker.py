@@ -33,7 +33,7 @@ class SwitchML(Packet):
     name = "SwitchMLPacket"
     fields_desc = [
         ByteField("rank", 0),
-        FieldListField("data", None, IntField("elem",0))
+        FieldListField("chunk", None, IntField("num",0))
     ]
 
 def AllReduce(soc, rank, data, result):
@@ -53,11 +53,11 @@ def AllReduce(soc, rank, data, result):
     #       We will use modified versions of these functions to test your program
     for i in range(0, len(data), CHUNK_SIZE):
         # Send packet and wait for response
-        payload = bytes(SwitchML(rank=rank, data=data[i:i+CHUNK_SIZE]))
+        payload = bytes(SwitchML(rank=rank, chunk=data[i:i+CHUNK_SIZE]))
         send(soc, payload, ("10.0.1.1", 50505))
         res_packet, _ = receive(soc, 1024)
-        result[i:i+CHUNK_SIZE] = SwitchML(res_packet).data
-        Log(SwitchML(res_packet).data)
+        result[i:i+CHUNK_SIZE] = SwitchML(res_packet).chunk
+        Log(SwitchML(res_packet).chunk)
 
 def main():
     rank = GetRankOrExit()

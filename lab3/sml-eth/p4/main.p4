@@ -26,12 +26,11 @@
 
 typedef bit<9>  sw_port_t;   /*< Switch port */
 typedef bit<48> mac_addr_t;  /*< MAC address */
-typedef bit<8> worker_id_t; /*< Worker IDs */
+typedef bit<8> rank_t;       /* Worker Rank */
+typedef bit<2048> chunk_t;   /* Chunk size 64*32 */
 
-typedef bit<2048> chunk_t; /* Chunk size 64*32 */
-
-const worker_id_t n_workers = 8;
-const mac_addr_t accumulator_mac = 0x08000000ffff;
+const bit<8> n_workers = 8;
+const mac_addr_t sml_mac = 0x08000000ffff;
 
 /******** Headers ********/
 
@@ -42,7 +41,7 @@ header ethernet_t {
 }
 
 header sml_t {
-  worker_id_t rank;
+  rank_t rank;
   chunk_t chunk;
 }
 
@@ -79,68 +78,38 @@ parser TheParser(packet_in packet,
 
 /******** Ingress Processing ********/
 
-bool check_first_arrival(register<bit<8>> bitmap, in worker_id_t i_worker) {
-  bit<8> old_bitmap_value;
+bool check_first_arrival(register<bit<8>> bitmap, in rank_t rank) {
+  bit<8> old_value;
   @atomic {
-    bitmap.read(old_bitmap_value, 0);
-    bit<8> new_bitmap_value = old_bitmap_value | (8w1 << i_worker);
-    bitmap.write(0, new_bitmap_value);
+    bitmap.read(old_value, 0);
+    bit<8> new_value = old_value | (8w1 << rank);
+    bitmap.write(0, new_value);
   };
-  return (old_bitmap_value & (8w1 << i_worker)) == 0;
+  return (old_value & (8w1 << rank)) == 0;
 }
 
-bool check_all_completed(register<bit<8>> bitmap, in worker_id_t i_worker) {
-  bit<8> new_bitmap_value;
+bool check_all_completed(register<bit<8>> bitmap, in rank_t rank) {
+  bit<8> new_value;
   @atomic {
-    bit<8> old_bitmap_value;
-    bitmap.read(old_bitmap_value, 0);
-    new_bitmap_value = old_bitmap_value | (8w1 << i_worker);
-    bitmap.write(0, new_bitmap_value);
+    bit<8> old_value;
+    bitmap.read(old_value, 0);
+    new_value = old_value | (8w1 << rank);
+    bitmap.write(0, new_value);
   };
-  return new_bitmap_value == 8w0xff;
+  return new_value == 8w0xff;
 }
 
 control TheIngress(inout headers hdr,
                    inout metadata meta,
                    inout standard_metadata_t standard_metadata) {
-  action forward_eth_packet(sw_port_t out_port) {
-    standard_metadata.egress_spec = out_port;
-  }
-
-  action broadcast_eth_packet() {
-    standard_metadata.mcast_grp = 1;
-  }
-
-  action drop_eth_packet() {
-    mark_to_drop(standard_metadata);
-  }
-  
-  table eth_exact {
-    key = {
-      hdr.eth.dst: exact;
-    }
-    actions = {
-      forward_eth_packet;
-      broadcast_eth_packet;
-      drop_eth_packet;
-    }
-    default_action = drop_eth_packet();
-  }
-
-  register<bit<8>>(1) arrival_bitmap;
-  register<chunk_t>(1) accumulated_chunk;
-  register<bit<8>>(1) completion_bitmap;
+  register<bit<8>>(1) worker_bitmap;
+  register<chunk_t>(1) aggregate_buffer;
+  register<bit<8>>(1) aggregate_status;
 
   apply {
-    if (!hdr.eth.isValid()) {
-      mark_to_drop(standard_metadata);
-    }
-    else if (!(hdr.eth.dst == accumulator_mac)) {
-      eth_exact.apply();
-    }
-    else if (hdr.sml.isValid()) {
+    if (hdr.eth.isValid() && hdr.sml.isValid() && hdr.eth.dst == sml_mac) {
       // Check if this is the first packet from this worker.
-      if (!check_first_arrival(arrival_bitmap, hdr.sml.rank)) {
+      if (!check_first_arrival(worker_bitmap, hdr.sml.rank)) {
         mark_to_drop(standard_metadata);
         return;
       }
@@ -149,13 +118,13 @@ control TheIngress(inout headers hdr,
       chunk_t old_value;
       chunk_t new_value;
       @atomic {
-        accumulated_chunk.read(old_value, 0);
+        aggregate_buffer.read(old_value, 0);
         new_value = old_value + hdr.sml.chunk;
-        accumulated_chunk.write(0, new_value);
+        aggregate_buffer.write(0, new_value);
       }
 
       // Check if all the chunks in this round are accumulated
-      if (!check_all_completed(completion_bitmap, hdr.sml.rank)) {
+      if (!check_all_completed(aggregate_status, hdr.sml.rank)) {
         mark_to_drop(standard_metadata);
         return;
       }
@@ -163,9 +132,12 @@ control TheIngress(inout headers hdr,
       // Accumulation done. Broadcast result and reset memory
       hdr.sml.chunk = new_value;
       standard_metadata.mcast_grp = 1;
-      arrival_bitmap.write(0, 0);
-      completion_bitmap.write(0, 0);
-      accumulated_chunk.write(0, 0);
+      worker_bitmap.write(0, 0);
+      aggregate_status.write(0, 0);
+      aggregate_buffer.write(0, 0);
+    }
+    else {
+      mark_to_drop(standard_metadata);
     }
   }
 }
@@ -181,7 +153,7 @@ control TheEgress(inout headers hdr,
     }
     if (hdr.sml.isValid()) {
       hdr.sml.rank = 0xff;
-      hdr.eth.src = accumulator_mac;
+      hdr.eth.src = sml_mac;
     }
   }
 }

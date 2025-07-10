@@ -35,7 +35,7 @@ class SwitchML(Packet):
     fields_desc = [
         ByteField("rank", 0),
         ByteField("chunkId", 0),
-        FieldListField("data", None, IntField("elem",0))
+        FieldListField("chunk", None, IntField("num",0))
     ]
 
 def AllReduce(soc, rank, data, result):
@@ -60,7 +60,7 @@ def AllReduce(soc, rank, data, result):
     
     for i in range(0, len(data), CHUNK_SIZE):
         chunkId = int(i / CHUNK_SIZE)
-        payload = bytes(SwitchML(rank=rank, chunkId=chunkId, data=data[i:i+CHUNK_SIZE]))
+        payload = bytes(SwitchML(rank=rank, chunkId=chunkId, chunk=data[i:i+CHUNK_SIZE]))
 
         while True:
             unreliable_send(soc, payload, ("10.0.1.1", 50505), p=0.1)
@@ -75,13 +75,13 @@ def AllReduce(soc, rank, data, result):
             if rec_packet.rank != 0xFF or rec_packet.chunkId != chunkId:
                 Log(f"Worker {rank}: wrong packet")
                 continue
-            result[i:i+CHUNK_SIZE] = rec_packet.data
-            Log(rec_packet.data)
+            result[i:i+CHUNK_SIZE] = rec_packet.chunk
+            Log(rec_packet.chunk)
             break
 
     # Send acknowledgement to signify the end of an iteration
     # chunkId=0xff to signify there is no chunk data. This is just an acknowledgement
-    final_ack = bytes(SwitchML(rank=rank, chunkId=0xff, data=[0 for j in range(CHUNK_SIZE)]))
+    final_ack = bytes(SwitchML(rank=rank, chunkId=0xff, chunk=[0 for j in range(CHUNK_SIZE)]))
     while True:
         unreliable_send(soc, final_ack, ("10.0.1.1", 50505), p=0.1)
         try:
