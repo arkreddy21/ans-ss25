@@ -25,7 +25,7 @@ from mininet.topo import Topo
 from mininet.cli import CLI
 import os
 
-NUM_WORKERS = 8
+NUM_WORKERS = 4
 
 class SMLTopo(Topo):
     def __init__(self, **opts):

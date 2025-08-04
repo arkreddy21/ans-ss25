@@ -31,7 +31,7 @@ typedef bit<32> ipv4_addr_t;  /*< IPv4 address */
 typedef bit<8> rank_t; /* Worker Rank */
 typedef bit<2048> chunk_t; /* Chunk size 64*32 */
 
-const bit<8> n_workers = 8;
+const bit<8> n_workers = 4;
 const mac_addr_t sml_mac = 0x08000000ffff;
 const ipv4_addr_t sml_ip = 0x0a000101;
 const bit<16> sml_port = 50505;
@@ -155,7 +155,7 @@ bool check_all_completed(register<bit<8>> bitmap, in rank_t rank) {
     new_value = old_value | (8w1 << rank);
     bitmap.write(0, new_value);
   };
-  return new_value == 8w0xff;
+  return new_value == 8w0x0f;
 }
 
 control TheIngress(inout headers hdr,
